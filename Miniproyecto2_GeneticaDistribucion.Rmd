@@ -131,6 +131,21 @@ Deben quedar con ~1700 registros después de la limpieza
 Guarde los datos limpios:
 
 ```{r}
+data_mh_limpio %>% count(data_mh_limpio$countryCode)
+# En 20 paises fue registrada la especie
+
+data_mh_limpio %>% count(data_mh_limpio$year)
+# Esto refleja datos sesgados por la historia de Inaturalist, ya que solo refleja los datos recientes.
+# El año con más registros es 2024
+
+data_mh %>%
+  filter(coordinateUncertaintyInMeters > 10000) %>%
+  nrow()
+# 112 registros tienen una incertidumbre mayor a 10km
+```
+
+
+```{r}
 write.csv(data_mh_limpio, "data/morpho_helenor_inat.csv", row.names = FALSE)
 ```
 
@@ -450,6 +465,8 @@ cor_test <- cor.test(datos_analisis2$pi, datos_analisis2$n_registros,
 
 cat("  r =", round(cor_test$estimate, 3), "\n")
 cat("  p-valor =", round(cor_test$p.value, 4), "\n")
+
+# No hay relación estadística, el p supera el umbral de 0.05 y r sugiere que hay una correlación positiva moderada (r = 0.571 sugiere que a mayor número de registros, mayor π)
 ```
 
 ### 6.5 La diversidad varía con la latitud?
@@ -477,8 +494,16 @@ ggsave("figures/gradiente_latitudinal.png", p5, width = 8, height = 6, dpi = 300
 #### Reflexione sobre sus resultados:
 
 - Las regiones con más registros de iNaturalist tienen también más diversidad genética? O podría ser al revés: más registros simplemente porque hay más personas observando (sesgo de muestreo)?
+
+Sí, hay una ligera tendencia de que entre más registros de inaturalist hay más diversidad geneética, sin embargo al no ser un muestreo estandarizado puede tener sesgos.
+
 - Se observa el gradiente latitudinal de diversidad esperado?
+
+Sí, Morpho helenor es una especie de mariposa que suele habitar regiones cercanas al ecuador, y en la gráfica podemos observar una tendencia negativa entre la diversidad genética y la latitud. Sin embargo hay dos valores que se salen del supuesto, lo que podría ser un sesgo debido al muestreo.
+
 - Qué diferencia hay entre la cobertura geográfica de iNaturalist y la de GenBank para esta especie?
+
+Mientras que inaturalist muestra una distribución más real y grande, genbank se concentra en puntos específicos, donde investigadores han tenido la disponibilidad no solo de documentar la especie, si no de realizarle una identificación genética.
 
 ---
 

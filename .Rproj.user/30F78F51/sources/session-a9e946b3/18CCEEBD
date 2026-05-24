@@ -3,9 +3,9 @@
     "path": "~/2026-1/Proyecto_distribución_ejemplo/Miniproyecto2_GeneticaDistribucion.Rmd",
     "project_path": "Miniproyecto2_GeneticaDistribucion.Rmd",
     "type": "r_markdown",
-    "hash": "0",
+    "hash": "2378502062",
     "contents": "",
-    "dirty": true,
+    "dirty": false,
     "created": 1779571061844.0,
     "source_on_save": false,
     "relative_order": 1,
@@ -16,11 +16,11 @@
         "scrollLine": "540"
     },
     "folds": "",
-    "lastKnownWriteTime": 1779570781,
+    "lastKnownWriteTime": 1779591244,
     "encoding": "UTF-8",
     "collab_server": "",
     "source_window": "",
-    "last_content_update": 1779589331005,
+    "last_content_update": 1779591244560,
     "read_only": false,
     "read_only_alternatives": []
 }
