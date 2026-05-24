@@ -1,0 +1,4 @@
+"0","p4
+p4
+"
+"0","ggsave(""figures/diversidad_vs_registros.png"", p4, width = 8, height = 6, dpi = 300)"

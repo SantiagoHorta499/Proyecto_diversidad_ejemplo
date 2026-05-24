@@ -1,0 +1,8 @@
+"0","data_mh %>%
+  filter(coordinateUncertaintyInMeters > 10000) %>%
+  nrow()
+"
+"1","[1]"
+"1"," 112"
+"1","
+"

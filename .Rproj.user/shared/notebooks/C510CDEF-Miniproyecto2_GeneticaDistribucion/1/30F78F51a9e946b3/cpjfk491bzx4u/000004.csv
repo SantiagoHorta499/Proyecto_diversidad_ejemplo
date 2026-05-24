@@ -1,0 +1,4 @@
+"0","p1
+p1
+"
+"0","ggsave(""figures/distribucion_inat.png"", p1, width = 10, height = 7, dpi = 300)"

@@ -1,0 +1,4 @@
+"0","p3
+p3
+"
+"0","ggsave(""figures/mapa_diversidad_distribucion.png"", p3, width = 11, height = 7, dpi = 300)"

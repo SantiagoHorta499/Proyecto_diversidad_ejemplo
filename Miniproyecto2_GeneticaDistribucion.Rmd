@@ -1,0 +1,553 @@
+---
+title: "Miniproyecto 2: Diversidad Genética y Distribución de Especies"
+subtitle: "Ejemplo con Morpho helenor — iNaturalist + GenBank"
+output: html_document
+date: "2026-05-19"
+---
+
+## Contexto del miniproyecto
+
+En este miniproyecto vamos a explorar si la **distribución geográfica** de una especie coincide con su **diversidad genética**: Son las poblaciones más diversas en el centro del rango de distribución? En los bordes? La pregunta que guía este ejemplo es:
+
+> ¿Existe una relación entre la densidad de registros de observación de *Morpho helenor* (iNaturalist) y la diversidad genética de sus poblaciones (GenBank)?
+
+Para responderla, necesitamos:
+
+1. Descargar registros de presencia desde **iNaturalist** vía el API de **GBIF**
+2. Descargar secuencias desde **GenBank**
+3. Calcular un índice de diversidad genética por región geográfica
+4. Analizar la relación entre diversidad genética y densidad de registros
+5. Visualizar la distribución y diversidad en mapas
+6. Subir todo a GitHub
+
+---
+
+## Parte 1. Preparar el entorno de trabajo
+
+Confirme que está dentro de su proyecto y que las carpetas existen:
+
+```{r}
+getwd()
+```
+
+```{r eval=FALSE}
+dir.create("data")
+dir.create("scripts")
+dir.create("figures")
+dir.create("output")
+```
+
+Instale y cargue los paquetes necesarios:
+
+```{r eval=FALSE}
+install.packages(c(
+  "rgbif",         # acceso a datos de GBIF (incluye iNaturalist)
+  "rentrez",       # acceso a GenBank (NCBI)
+  "ape",           # análisis de secuencias
+  "tidyverse",     # manipulación y visualización
+  "sf",            # datos espaciales vectoriales
+  "terra",         # datos raster
+  "rnaturalearth", # mapas base
+  "ggdensity",     # visualización de densidad
+  "viridis",        # paletas de color accesibles
+  "msa",
+  "Biostrings"
+  ))
+```
+
+```{r message=FALSE, warning=FALSE}
+library(rgbif)
+library(rentrez)
+library(ape)
+library(tidyverse)
+library(sf)
+library(terra)
+library(rnaturalearth)
+library(viridis)
+library(msa)
+library(Biostrings)
+```
+
+---
+
+## Parte 2. Descargar registros de distribución desde iNaturalist vía GBIF
+
+**iNaturalist** (https://www.inaturalist.org/) es una plataforma de ciencia ciudadana donde voluntarios registran observaciones de organismos. Sus datos de mayor calidad (grado de investigación) son compartidos automáticamente con **GBIF**. Explore iNaturalist antes de empezar: busque *Morpho helenor* y observe cuántos registros existen y en qué países.
+
+El paquete `rgbif` nos permite descargar estos datos directamente desde R, filtrando por fuente (iNaturalist tiene su propio datasetKey en GBIF):
+
+```{r}
+# El datasetKey de iNaturalist en GBIF es:
+# 50c9509d-22c7-4a22-a47d-8c48425ef4a7
+
+# Primero obtengamos el código taxonómico de la especie
+mh_taxon <- name_backbone(name = "Morpho helenor", rank = "species")
+mh_taxon
+```
+
+```{r}
+# Descargar registros de iNaturalist para Morpho helenor
+mh_obs <- occ_search(
+  taxonKey = mh_taxon$usageKey,
+  datasetKey = "50c9509d-22c7-4a22-a47d-8c48425ef4a7",  # iNaturalist
+  hasCoordinate = TRUE,
+  hasGeospatialIssue = FALSE,
+  occurrenceStatus = "PRESENT",
+  limit = 2000,
+  fields = c("key", "scientificName", "decimalLatitude", "decimalLongitude",
+             "eventDate", "stateProvince", "countryCode",
+             "coordinateUncertaintyInMeters", "year"))
+
+```
+
+Extraiga los datos y realice una limpieza básica:
+
+```{r}
+data_mh <- mh_obs$data
+
+# Revisión inicial
+glimpse(data_mh)
+```
+
+```{r}
+# Limpieza: coordenadas no nulas, incertidumbre razonable (< 1000 m), año conocido
+data_mh_limpio <- data_mh %>%
+  filter(
+    !is.na(decimalLatitude),
+    !is.na(decimalLongitude),
+    is.na(coordinateUncertaintyInMeters) | coordinateUncertaintyInMeters < 1000,
+    !is.na(year))
+
+```
+
+Deben quedar con ~1700 registros después de la limpieza
+
+#### Explore su dataset y responda:
+
+- En cuántos países se registró la especie?
+- En qué años hay más registros? Esto refleja la historia de iNaturalist o la biología de la especie?
+- Cuántos registros tienen incertidumbre de coordenadas muy alta (> 10 km)? (para responder esta, utilice su bd inicial, sin limpiar)
+
+Guarde los datos limpios:
+
+```{r}
+write.csv(data_mh_limpio, "data/morpho_helenor_inat.csv", row.names = FALSE)
+```
+
+---
+
+## Parte 3. Descargar secuencias desde GenBank
+
+Ahora descargamos las secuencias de *Morpho helenor* disponibles en GenBank. Usaremos el marcador COI, el más común en estudios de biodiversidad.
+
+```{r}
+# Buscar secuencias de COI de Morpho helenor
+busqueda_mh <- entrez_search(
+  db = "nucleotide",
+  term = "Morpho helenor[ORGN] AND COI[Gene]",
+  retmax = 200)
+```
+
+```{r}
+# Descargar secuencias en formato FASTA
+seqs_mh_raw <- entrez_fetch(
+  db = "nucleotide",
+  id = busqueda_mh$ids,
+  rettype = "fasta",
+  retmode = "text")
+
+writeLines(seqs_mh_raw, "data/morpho_helenor_COI.fasta")
+```
+
+```{r}
+# Descargar metadatos (formato GenBank completo)
+gb_mh_raw <- entrez_fetch(
+  db = "nucleotide",
+  id = busqueda_mh$ids,
+  rettype = "gb",
+  retmode = "text")
+
+writeLines(gb_mh_raw, "data/morpho_helenor_COI.gb")
+```
+
+### Extraer metadatos geográficos de GenBank
+
+```{r}
+# Dividir por registros
+registros_mh <- gb_mh_raw %>%
+  str_split("(?=LOCUS\\s)", simplify = FALSE) %>%
+  unlist()
+registros_mh <- registros_mh[nchar(registros_mh) > 100]
+
+# Extraer campos de cada registro
+metadatos_mh <- registros_mh %>%
+  map_dfr(~ tibble(
+        accession = str_extract(
+      .x,
+      "(?<=ACCESSION\\s{1,10})\\S+"),
+    
+      pais = str_extract(
+      .x,
+      '(?<=/country=")[^":]+'),
+    
+    lat_lon = str_extract(
+      .x,
+      '(?<=/lat_lon=")[^"]+')
+    ))
+
+# Parsear coordenadas
+metadatos_mh_coord <- metadatos_mh %>%
+  filter(!is.na(lat_lon)) %>%
+  mutate(
+    lat = as.numeric(str_extract(lat_lon, "[0-9.]+")),
+    lat = ifelse(str_detect(lat_lon, "S"), -lat, lat),
+    lon = as.numeric(str_extract(lat_lon, "(?<=\\s)[0-9.]+")),
+    lon = ifelse(str_detect(lat_lon, "W"), -lon, lon)
+  ) %>%
+  filter(!is.na(lat), !is.na(lon))
+
+write.csv(metadatos_mh_coord, "data/morpho_helenor_metadatos_genbank.csv", row.names = FALSE)
+```
+
+---
+
+## Parte 4. Definir regiones geográficas y calcular diversidad
+
+Para relacionar diversidad genética con distribución, necesitamos agrupar las secuencias por regiones geográficas comparables. Vamos a crear una cuadrícula (grid) sobre el área de distribución de la especie:
+
+```{r}
+# Leer secuencias
+seqs_mh <- readDNAStringSet(
+  "data/morpho_helenor_COI.fasta")
+names(seqs_mh)
+```
+
+```{r}
+# solo para la profe
+# Preparar las secuencias para el alineamiento
+seqs_mh_dna <- DNAStringSet(
+  sapply(seqs_mh, function(x) paste(as.character(x), collapse = "")))
+alineamiento <- msa(seqs_mh, method = "ClustalW")
+
+writeXStringSet(
+  as(alineamiento, "DNAStringSet"),
+  filepath = "data/alineamiento_mh.fasta")
+
+# Los estudiantes inician aquí!
+# Library(ape)
+seq_matriz <- read.dna(
+  "data/alineamiento_mh.fasta",
+  format = "fasta")
+
+rownames(seq_matriz)
+dim(seq_matriz)
+dist.dna(seq_matriz)
+
+```
+
+Vamos a asignar cada secuencia a una celda de cuadrícula de 5° × 5°:
+
+```{r}
+# Crear celdas de 5 grados sobre las coordenadas disponibles
+metadatos_mh_coord <- metadatos_mh_coord %>%
+  mutate(
+    celda_lat = floor(lat / 5) * 5,
+    celda_lon = floor(lon / 5) * 5,
+    celda_id = paste0(celda_lat, "_", celda_lon)
+  )
+
+table(metadatos_mh_coord$celda_id)
+```
+
+Calculamos π por celda (mínimo 3 secuencias):
+
+```{r}
+ids_seqs_mh <- rownames(seq_matriz)
+
+acc_seqs_mh <- str_extract(
+  ids_seqs_mh,
+  "^[A-Z]{1,2}[0-9]+")
+
+indices_match_mh <- match(
+  acc_seqs_mh,
+  metadatos_mh_coord$accession)
+
+celdas_seqs <- metadatos_mh_coord$celda_id[
+  indices_match_mh]
+
+lat_celdas <- metadatos_mh_coord$celda_lat[
+  indices_match_mh]
+
+lon_celdas <- metadatos_mh_coord$celda_lon[
+  indices_match_mh]
+
+celdas_validas <- names(
+  which(table(celdas_seqs) >= 3))
+
+diversidad_celdas <- map_dfr(
+  celdas_validas,
+  function(c) {
+    
+    idx <- which(celdas_seqs == c)
+    
+    # 🔥 usar seq_matriz
+    sub_matrix <- seq_matriz[idx, ]
+    
+    dist_sub <- dist.dna(
+      sub_matrix,
+      model = "K80",
+      pairwise.deletion = TRUE)
+    
+    pi_celda <- mean(
+      as.vector(dist_sub),
+      na.rm = TRUE)
+    
+    tibble(
+      celda_id = c,
+      celda_lat = lat_celdas[idx[1]],
+      celda_lon = lon_celdas[idx[1]],
+      n_seqs = length(idx),
+      pi = pi_celda)
+  }
+)
+
+print(diversidad_celdas)
+write.csv(diversidad_celdas, "output/diversidad_por_celda.csv", row.names = FALSE)
+```
+
+---
+
+## Parte 5. Calcular densidad de registros de iNaturalist por celda
+
+```{r}
+# Asignar celdas a los registros de iNaturalist
+data_mh_limpio <- data_mh_limpio %>%
+  mutate(
+    celda_lat = floor(decimalLatitude / 5) * 5,
+    celda_lon = floor(decimalLongitude / 5) * 5,
+    celda_id = paste0(celda_lat, "_", celda_lon)
+  )
+
+# Contar registros por celda
+densidad_celdas <- data_mh_limpio %>%
+  group_by(celda_id, celda_lat, celda_lon) %>%
+  summarise(
+    n_registros = n(),
+    n_anios = n_distinct(year),
+    .groups = "drop"
+  )
+
+head(densidad_celdas)
+```
+
+Unimos diversidad y densidad:
+
+```{r}
+datos_analisis2 <- inner_join(diversidad_celdas, 
+                              densidad_celdas, by = "celda_id") %>%
+  select(celda_id, celda_lat = celda_lat.x, celda_lon = celda_lon.x,
+         n_seqs, pi, n_registros, n_anios)
+
+print(datos_analisis2)
+write.csv(datos_analisis2, "output/diversidad_vs_distribucion.csv", row.names = FALSE)
+```
+
+---
+
+## Parte 6. Análisis Exploratorio de Datos (EDA)
+
+### 6.1 Mapa de distribución (iNaturalist)
+
+```{r}
+mundo <- ne_countries(returnclass = "sf", scale = "medium")
+
+# Rango de la especie aproximado (Mesoamérica y América del Sur)
+bbox <- c(xmin = -100, xmax = -30, ymin = -25, ymax = 25)
+
+p1 <- ggplot() +
+  geom_sf(data = mundo, fill = "grey90", color = "grey50", size = 0.3) +
+  geom_point(data = data_mh_limpio,
+             aes(x = decimalLongitude, y = decimalLatitude),
+             color = "#3B9EBB", size = 1, alpha = 0.4) +
+  coord_sf(xlim = c(bbox["xmin"], bbox["xmax"]),
+           ylim = c(bbox["ymin"], bbox["ymax"])) +
+  labs(x = "Longitud", y = "Latitud",
+    caption = paste("N =", nrow(data_mh_limpio), "registros")) +
+  theme_bw(base_size = 13)
+
+p1
+ggsave("figures/distribucion_inat.png", p1, width = 10, height = 7, dpi = 300)
+```
+
+### 6.2 Mapa de densidad de registros
+
+```{r}
+p2 <- ggplot() +
+  geom_sf(data = mundo, fill = "grey90", color = "grey50", size = 0.3) +
+  stat_density_2d(
+    data = data_mh_limpio,
+    aes(x = decimalLongitude, y = decimalLatitude, fill = after_stat(level)),
+    geom = "polygon", alpha = 0.7, bins = 15) +
+  scale_fill_viridis_c(option = "inferno", name = "Densidad") +
+  coord_sf(xlim = c(bbox["xmin"], bbox["xmax"]),
+           ylim = c(bbox["ymin"], bbox["ymax"])) +
+  labs(x = "Longitud", y = "Latitud") +
+  theme_bw(base_size = 13)
+
+p2
+ggsave("figures/densidad_distribucion.png", p2, width = 10, height = 7, dpi = 300)
+```
+
+### 6.3 Mapa combinado: diversidad genética sobre distribución
+
+```{r}
+p3 <- ggplot() +
+  geom_sf(data = mundo, fill = "grey90", color = "grey50", size = 0.3) +
+  geom_point(data = data_mh_limpio,
+             aes(x = decimalLongitude, y = decimalLatitude),
+             color = "grey70", size = 0.8, alpha = 0.3) +
+  geom_point(data = datos_analisis2,
+             aes(x = celda_lon + 2.5, y = celda_lat + 2.5,
+                 color = pi, size = n_seqs),
+             alpha = 0.9) +
+  scale_color_gradient2(
+    low = "#2196F3", mid = "#FFEB3B", high = "#F44336",
+    midpoint = median(datos_analisis2$pi, na.rm = TRUE),
+    name = "π (diversidad\ngenética)"
+  ) +
+  scale_size_continuous(name = "N secuencias", range = c(4, 10)) +
+  coord_sf(xlim = c(bbox["xmin"], bbox["xmax"]),
+           ylim = c(bbox["ymin"], bbox["ymax"])) +
+  labs(x = "Longitud", y = "Latitud") +
+  theme_bw(base_size = 13)
+
+p3
+ggsave("figures/mapa_diversidad_distribucion.png", p3, width = 11, height = 7, dpi = 300)
+```
+
+### 6.4 Relación diversidad vs. densidad de observaciones
+
+```{r}
+p4 <- ggplot(datos_analisis2, aes(x = n_registros, y = pi)) +
+  geom_point(aes(size = n_seqs, color = celda_lat), alpha = 0.8) +
+  geom_smooth(method = "lm", se = TRUE, color = "#333333", linetype = "dashed") +
+  scale_color_gradient2(
+    low = "#1B998B", mid = "#FFFD82", high = "#E84855",
+    midpoint = 0, name = "Latitud") +
+  scale_size_continuous(name = "N secuencias", range = c(3, 10)) +
+  labs(x = "Número de registros en iNaturalist",
+    y = "Diversidad de nucleótidos (π)") +
+  theme_bw(base_size = 13)
+
+p4
+ggsave("figures/diversidad_vs_registros.png", p4, width = 8, height = 6, dpi = 300)
+```
+
+```{r}
+# Existe correlación estadística?
+cor_test <- cor.test(datos_analisis2$pi, datos_analisis2$n_registros,
+                     method = "pearson")
+
+cat("  r =", round(cor_test$estimate, 3), "\n")
+cat("  p-valor =", round(cor_test$p.value, 4), "\n")
+```
+
+### 6.5 La diversidad varía con la latitud?
+
+La hipótesis de gradiente latitudinal predice más diversidad en los trópicos. Verifiquemos:
+
+```{r}
+p5 <- ggplot(datos_analisis2, aes(x = abs(celda_lat), y = pi)) +
+  geom_point(aes(size = n_seqs, color = as.factor(sign(celda_lat))), 
+             alpha = 0.8) +
+  geom_smooth(method = "lm", se = TRUE, color = "#444444", linetype = "dashed") +
+  scale_color_manual(
+    values = c("-1" = "#9B5DE5", "1" = "#F15BB5"),
+    labels = c("Hemisferio Sur", "Hemisferio Norte"),
+    name = "Hemisferio") +
+  scale_size_continuous(name = "N secuencias", range = c(3, 10)) +
+  labs(x = "Latitud absoluta (distancia al ecuador)",
+    y = "Diversidad de nucleótidos (π)") +
+  theme_bw(base_size = 13)
+
+p5
+ggsave("figures/gradiente_latitudinal.png", p5, width = 8, height = 6, dpi = 300)
+```
+
+#### Reflexione sobre sus resultados:
+
+- Las regiones con más registros de iNaturalist tienen también más diversidad genética? O podría ser al revés: más registros simplemente porque hay más personas observando (sesgo de muestreo)?
+- Se observa el gradiente latitudinal de diversidad esperado?
+- Qué diferencia hay entre la cobertura geográfica de iNaturalist y la de GenBank para esta especie?
+
+---
+
+## Parte 7. Comparar cobertura geográfica: iNaturalist vs. GenBank
+
+Una pregunta importante en bioinformática es **¿qué tan representativos son los datos disponibles?** Comparemos dónde tenemos datos de distribución vs. dónde tenemos datos genéticos:
+
+```{r}
+# Convertir a objetos espaciales
+inat_sf <- st_as_sf(data_mh_limpio,
+                    coords = c("decimalLongitude", "decimalLatitude"),
+                    crs = 4326)
+
+genbank_sf <- st_as_sf(metadatos_mh_coord,
+                       coords = c("lon", "lat"),
+                       crs = 4326)
+
+# Mapa de comparación
+p6 <- ggplot() +
+  geom_sf(data = mundo, fill = "grey90", color = "grey60", size = 0.3) +
+  geom_sf(data = inat_sf, color = "#00B4D8", size = 1, alpha = 0.3,
+          aes(shape = "iNaturalist")) +
+  geom_sf(data = genbank_sf, color = "#EF233C", size = 2.5,
+          aes(shape = "GenBank")) +
+  scale_shape_manual(
+    values = c("iNaturalist" = 16, "GenBank" = 17),
+    name = "Fuente"
+  ) +
+  coord_sf(xlim = c(bbox["xmin"], bbox["xmax"]),
+           ylim = c(bbox["ymin"], bbox["ymax"])) +
+  labs(x = "Longitud", y = "Latitud",
+    caption = paste("iNaturalist:", nrow(data_mh_limpio),
+                    "registros | GenBank:", nrow(metadatos_mh_coord), 
+                    "secuencias con coords")) +
+  theme_bw(base_size = 13)
+
+p6
+ggsave("figures/comparacion_fuentes.png", p6, width = 10, height = 7, dpi = 300)
+```
+
+## Parte 8. Actualizar el repositorio en GitHub
+
+Revise sus archivos generados antes de hacer el push:
+
+```{r}
+# Verificar que los archivos están en su lugar
+list.files("data/")
+list.files("output/")
+list.files("figures/")
+```
+
+Ya sabe cómo hacer su actualización!
+
+
+## Preguntas para su miniproyecto independiente
+
+Elija una especie y diseñe su propio análisis. Considere:
+
+1. **¿Qué especie tiene suficientes datos en ambas fuentes?** Verifique antes de empezar: busque en iNaturalist (`https://www.inaturalist.org`) y en GenBank cuántos registros y secuencias existen con información geográfica.
+
+2. **¿Cuál es el marcador genético más disponible para su especie?** Para animales suele ser COI. Para plantas, considere matK o rbcL. Para hongos, ITS.
+
+3. **¿Qué escala geográfica tiene más sentido?** Para una especie muy distribuida, una cuadrícula de 5° puede ser adecuada. Para una especie local, quizás necesite celdas de 1° o incluso trabajar por localidad.
+
+4. **¿Cuál es su hipótesis sobre la relación distribución-diversidad?** Algunas opciones:
+   - El centro del rango tiene mayor diversidad (hipótesis de abundancia central)
+   - Los bordes del rango tienen mayor diversidad (refugios glaciales)
+   - La diversidad es independiente de la densidad de registros (sesgo de muestreo)
+
+5. **¿Cómo interpretaría una falta de correlación?** ¿Podría deberse a sesgos de muestreo en iNaturalist o GenBank? ¿A la escala geográfica elegida?
+
+Documente todo en un archivo .Rmd propio. Su repositorio en GitHub debe incluir: datos crudos, datos procesados, scripts, figuras, y un README.md claro que explique la pregunta, los métodos y los resultados principales.

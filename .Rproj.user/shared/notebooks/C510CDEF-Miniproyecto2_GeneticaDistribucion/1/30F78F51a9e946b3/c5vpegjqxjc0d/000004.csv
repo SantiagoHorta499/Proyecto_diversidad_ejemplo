@@ -1,0 +1,4 @@
+"0","p2
+p2
+"
+"0","ggsave(""figures/densidad_distribucion.png"", p2, width = 10, height = 7, dpi = 300)"
